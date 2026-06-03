@@ -16,6 +16,14 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
+**Staying current:** Pull the latest changes any time with:
+
+```bash
+git pull
+```
+
+No reinstall needed unless `requirements.txt` changes (it rarely does).
+
 ---
 
 ## Getting Your `connect.sid` Cookie
@@ -71,9 +79,22 @@ python thm-pointhound.py KaliMax --mark-done hydra sustah
 
 ---
 
+## How Points Are Calculated
+
+THM does not expose a direct points-per-room API. Points are derived from the room's public scoreboard (`/api/v2/rooms/scoreboard`), which shows the scores of the top 100 completions.
+
+TryHackMe uses two scoring models, and the tool handles each differently:
+
+**Walkthrough rooms** (linear, single point value) use `min()` of scoreboard scores. When THM nerfs a room's point value, players who completed it before the change keep their original higher score. New completions reflect the lower current value. `min()` always returns what the room is worth today.
+
+**Challenge rooms** (CTF-style, points per flag) use `mode()` of scoreboard scores. Players earn points for each flag they solve, so scores vary based on how many flags were captured. `mode()` returns the most common total, which represents a standard full completion.
+
+Room point values are cached and automatically refreshed every 7 days to stay current with any changes THM makes.
+
+---
+
 ## Notes
 
 - **First run is slow.** Room details are fetched one at a time to avoid rate limits. All subsequent runs use a local cache at `~/.cache/thm_pointhound/`.
 - **Learning path completions** are not returned by TryHackMe's completion API. This is a known platform limitation. Use `--mark-done "Room Name"` to flag any room that shows as uncompleted when you know you have finished it. The room name from the output table works directly.
-- **Room points are refreshed every 7 days** to catch any scoring changes THM makes after the initial cache.
 - **Business plan rooms** (AWS, Azure, XDR, Sentinel labs) appear in the sitemap but are paywalled. They are listed separately at the bottom so you can evaluate the cost/benefit.
