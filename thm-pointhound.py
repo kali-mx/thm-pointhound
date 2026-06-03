@@ -14,8 +14,8 @@ import random
 import json
 import argparse
 from pathlib import Path
-from datetime import datetime, timedelta
 from statistics import mode, StatisticsError
+from datetime import datetime, timedelta
 
 import cloudscraper
 from rich.console import Console
@@ -219,18 +219,21 @@ def _points_stale(entry: dict) -> bool:
         return True
 
 
-def _parse_room_details(data: dict) -> tuple[str, str, str]:
-    """Return (name, difficulty, release_date_iso) from a rooms/details API response."""
+def _parse_room_details(data: dict) -> tuple[str, str, str, int]:
+    """Return (name, difficulty, release_date_iso, score_type) from a rooms/details API response.
+    score_type 1 = fixed-value walkthrough; 0 = per-flag challenge room.
+    """
     d = data.get("data", {})
-    name    = d.get("title") or d.get("name") or ""
-    diff    = str(d.get("difficulty") or "unknown").lower()
-    release = ""
+    name       = d.get("title") or d.get("name") or ""
+    diff       = str(d.get("difficulty") or "unknown").lower()
+    score_type = int(d.get("scoreType", 1))
+    release    = ""
     for key in ("createdAt", "created", "publishedAt", "releaseDate", "addedAt", "updatedAt"):
         v = d.get(key)
         if v and isinstance(v, str) and len(v) >= 10:
             release = v[:10]
             break
-    return name, diff, release
+    return name, diff, release, score_type
 
 
 # Patterns in THM room RSC/HTML that confirm the *current user* finished the room.
@@ -281,11 +284,17 @@ def days_old(date_iso: str) -> str:
         return ""
 
 
-def _scoreboard_points(scraper, code: str) -> int:
+def _scoreboard_points(scraper, code: str, score_type: int = 1) -> int:
     """
-    Fetch the scoreboard for a room and return the mode of completion scores.
-    This matches the original thm_points.py approach — scoreboard is the only
-    endpoint that reliably exposes the room's point value.
+    Fetch the scoreboard for a room and return the current point value.
+
+    score_type 1 (fixed-value walkthrough): use min() so point nerfs are caught
+    immediately. Old completions keep their historical score, inflating mode/max,
+    but new completions get the lower current value -- min() reflects that.
+
+    score_type 0 (per-flag challenge room): scores vary by how many flags a user
+    solved, so min() would just be a partial completion. mode() captures the most
+    common full-completion score instead.
     """
     url = f"{BASE_URL}/rooms/scoreboard?roomCode={code}&limit=100"
     data = safe_get(scraper, url)
@@ -298,6 +307,8 @@ def _scoreboard_points(scraper, code: str) -> int:
     ]
     if not scores:
         return 0
+    if score_type == 1:
+        return min(scores)
     try:
         return mode(scores)
     except StatisticsError:
@@ -350,30 +361,32 @@ def get_all_room_details(scraper, codes: list[str], sitemap_dates: dict[str, str
 
         for i, code in enumerate(to_fetch):
             if code in stale_set:
-                # Points-only refresh — reuse cached name/difficulty/release
-                points = _scoreboard_points(scraper, code)
+                # Points-only refresh — reuse cached name/difficulty/release/score_type
+                score_type = cache[code].get("score_type", 1)
+                points = _scoreboard_points(scraper, code, score_type)
                 cache[code]["points"] = points
                 cache[code]["points_fetched_at"] = datetime.now().isoformat()
             else:
                 # Full fetch: details + scoreboard
                 details_data = safe_get(scraper, f"{BASE_URL}/rooms/details?roomCode={code}")
                 if details_data and details_data.get("status") == "success":
-                    name, diff, api_date = _parse_room_details(details_data)
+                    name, diff, api_date, score_type = _parse_room_details(details_data)
                     release = api_date or (sitemap_dates or {}).get(code, "")
                     is_placeholder = False
                 else:
-                    name, diff, release = code, "unknown", (sitemap_dates or {}).get(code, "")
+                    name, diff, release, score_type = code, "unknown", (sitemap_dates or {}).get(code, ""), 1
                     is_placeholder = True
 
                 time.sleep(0.4 + random.uniform(0, 0.2))
 
-                points = _scoreboard_points(scraper, code) if not is_placeholder else 0
+                points = _scoreboard_points(scraper, code, score_type) if not is_placeholder else 0
                 cache[code] = {
                     "name":              name,
                     "difficulty":        diff,
                     "points":            points,
                     "release":           release,
                     "placeholder":       is_placeholder,
+                    "score_type":        score_type,
                     "points_fetched_at": datetime.now().isoformat(),
                 }
 
