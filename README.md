@@ -48,7 +48,7 @@ python thm-pointhound.py <username> --cookie '<your connect.sid>'
 | `--min-points P` | 0 | Hide rooms worth less than P points |
 | `--no-cache` | off | Force a fresh fetch of room data |
 | `--verify` | off | Attempt to detect completions the API missed by scraping room pages |
-| `--mark-done CODE [CODE ...]` | off | Manually mark a room as completed |
+| `--mark-done NAME [NAME ...]` | off | Manually mark a room as completed. Accepts the room name or code |
 | `--list-done` | off | Show all manually marked rooms |
 | `--debug` | off | Print raw API fields for troubleshooting |
 
@@ -64,7 +64,8 @@ python thm-pointhound.py KaliMax --cookie 's:abc123...' --top 10 --difficulty ha
 # Skip rooms under 100 pts, force fresh data
 python thm-pointhound.py KaliMax --cookie 's:abc123...' --min-points 100 --no-cache
 
-# Manually mark a room the API missed (most reliable fix for learning path completions)
+# Mark a room done by name (no need to know the room code)
+python thm-pointhound.py KaliMax --mark-done "Defensive Security Intro"
 python thm-pointhound.py KaliMax --mark-done hydra sustah
 ```
 
@@ -73,6 +74,6 @@ python thm-pointhound.py KaliMax --mark-done hydra sustah
 ## Notes
 
 - **First run is slow.** Room details are fetched one at a time to avoid rate limits. All subsequent runs use a local cache at `~/.cache/thm_pointhound/`.
-- **Learning path completions** are not returned by TryHackMe's completion API. This is a known platform limitation. Use `--mark-done <roomcode>` to flag any room that shows as uncompleted when you know you have finished it.
+- **Learning path completions** are not returned by TryHackMe's completion API. This is a known platform limitation. Use `--mark-done "Room Name"` to flag any room that shows as uncompleted when you know you have finished it. The room name from the output table works directly.
 - **Room points are refreshed every 7 days** to catch any scoring changes THM makes after the initial cache.
 - **Business plan rooms** (AWS, Azure, XDR, Sentinel labs) appear in the sitemap but are paywalled. They are listed separately at the bottom so you can evaluate the cost/benefit.

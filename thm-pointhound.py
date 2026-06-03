@@ -475,8 +475,8 @@ def main():
                         help="connect.sid cookie value (bypasses Vercel bot detection)")
     parser.add_argument("--debug",     action="store_true",
                         help="Print raw API response fields to diagnose matching issues")
-    parser.add_argument("--mark-done", nargs="+", metavar="CODE",
-                        help="Locally mark room code(s) as completed (bypasses API mismatch)")
+    parser.add_argument("--mark-done", nargs="+", metavar="NAME_OR_CODE",
+                        help="Mark room(s) as completed by name or code (bypasses API mismatch)")
     parser.add_argument("--list-done", action="store_true",
                         help="Show manually marked-done overrides and exit")
     parser.add_argument("--verify",   action="store_true",
@@ -489,17 +489,35 @@ def main():
     # Handle --mark-done / --list-done before hitting any API
     overrides = load_overrides()
     if args.mark_done:
-        new_codes = {c.lower() for c in args.mark_done}
+        # Build name->code lookup from local cache so users can pass room names
+        cache = load_details_cache()
+        name_to_code = {
+            d["name"].lower(): code
+            for code, d in cache.items()
+            if d.get("name") and not d.get("placeholder")
+        }
+        new_codes: set[str] = set()
+        for inp in args.mark_done:
+            inp_lower = inp.lower()
+            if inp_lower in name_to_code:
+                resolved = name_to_code[inp_lower]
+                console.print(f"[dim]Resolved '{inp}' -> {resolved}[/dim]")
+                new_codes.add(resolved)
+            else:
+                new_codes.add(inp_lower)
         overrides |= new_codes
         save_overrides(overrides)
         console.print(f"[green]✓[/green] Marked as done: {', '.join(sorted(new_codes))}")
         console.print(f"[dim]Total manual overrides: {len(overrides)}[/dim]")
         return
     if args.list_done:
+        cache = load_details_cache()
+        code_to_name = {code: d.get("name", code) for code, d in cache.items()}
         if overrides:
             console.print("[bold]Manually marked done:[/bold]")
             for c in sorted(overrides):
-                console.print(f"  {c}")
+                label = code_to_name.get(c, c)
+                console.print(f"  {label}  [dim]({c})[/dim]")
         else:
             console.print("[dim]No manual overrides set.[/dim]")
         return
