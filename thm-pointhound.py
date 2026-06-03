@@ -35,6 +35,7 @@ DETAILS_CACHE      = CACHE_DIR / "room_details.json"
 OVERRIDES_FILE     = CACHE_DIR / "manual_done.json"
 SITEMAP_TTL_HOURS  = 24      # re-fetch sitemap daily
 DETAILS_SAVE_EVERY = 50      # persist cache every N rooms fetched
+POINTS_TTL_DAYS    = 7       # re-fetch scoreboard after this many days
 TODAY              = datetime.now().date()
 
 HEADERS = {
@@ -208,6 +209,16 @@ def save_details_cache(cache: dict):
     DETAILS_CACHE.write_text(json.dumps(cache))
 
 
+def _points_stale(entry: dict) -> bool:
+    fetched = entry.get("points_fetched_at")
+    if not fetched:
+        return True
+    try:
+        return (datetime.now() - datetime.fromisoformat(fetched)).days >= POINTS_TTL_DAYS
+    except Exception:
+        return True
+
+
 def _parse_room_details(data: dict) -> tuple[str, str, str]:
     """Return (name, difficulty, release_date_iso) from a rooms/details API response."""
     d = data.get("data", {})
@@ -295,26 +306,37 @@ def _scoreboard_points(scraper, code: str) -> int:
 
 def get_all_room_details(scraper, codes: list[str], sitemap_dates: dict[str, str] | None = None, force=False) -> dict:
     """
-    Return {code: {name, difficulty, points}} for every code.
-    Each room requires two API calls (details + scoreboard).
-    Fetches only codes missing from cache; saves incrementally.
+    Return {code: {name, difficulty, points, points_fetched_at}} for every code.
+    - missing: no cache entry or placeholder retry -> full fetch (details + scoreboard)
+    - stale:   cached but points older than POINTS_TTL_DAYS -> scoreboard-only refresh
+    Saves incrementally every DETAILS_SAVE_EVERY rooms.
     """
     cache = {} if force else load_details_cache()
-    # Also re-fetch entries that are placeholders (name == code, points == 0)
+
     missing = [
         c for c in codes
         if c not in cache
         or (cache[c].get("name") == c and cache[c].get("points") == 0)
     ]
+    stale = [
+        c for c in codes
+        if c not in missing and not cache.get(c, {}).get("placeholder") and _points_stale(cache.get(c, {}))
+    ]
+    to_fetch = missing + stale
 
-    if not missing:
+    if not to_fetch:
         return cache
 
-    est_seconds = len(missing)          # ~1s per room (2 calls × 0.5s)
-    est_display = f"~{est_seconds//60}m {est_seconds%60}s" if est_seconds >= 60 else f"~{est_seconds}s"
+    stale_set = set(stale)
+    parts = []
+    if missing:
+        parts.append(f"{len(missing)} new")
+    if stale:
+        parts.append(f"{len(stale)} refreshing points (>{POINTS_TTL_DAYS}d old)")
+    cached_count = len(codes) - len(to_fetch)
     console.print(
-        f"\n[bold]Fetching details for {len(missing)} rooms[/bold] "
-        f"[dim](cached: {len(codes) - len(missing)}  •  est. {est_display} on first run)[/dim]"
+        f"\n[bold]Fetching room data:[/bold] {', '.join(parts)}"
+        f"  [dim](cached: {cached_count})[/dim]"
     )
 
     with Progress(
@@ -324,34 +346,36 @@ def get_all_room_details(scraper, codes: list[str], sitemap_dates: dict[str, str
         MofNCompleteColumn(),
         console=console,
     ) as prog:
-        task = prog.add_task(f"Fetching details for {len(missing)} uncompleted rooms…", total=len(missing))
+        task = prog.add_task(f"Fetching details for {len(to_fetch)} uncompleted rooms…", total=len(to_fetch))
 
-        for i, code in enumerate(missing):
-            # --- details: name + difficulty ---
-            details_data = safe_get(scraper, f"{BASE_URL}/rooms/details?roomCode={code}")
-            if details_data and details_data.get("status") == "success":
-                name, diff, api_date = _parse_room_details(details_data)
-                release = api_date or (sitemap_dates or {}).get(code, "")
-                is_placeholder = False
-            else:
-                name, diff, release = code, "unknown", (sitemap_dates or {}).get(code, "")
-                is_placeholder = True
-
-            time.sleep(0.4 + random.uniform(0, 0.2))
-
-            # --- scoreboard: points ---
-            if not is_placeholder:
+        for i, code in enumerate(to_fetch):
+            if code in stale_set:
+                # Points-only refresh — reuse cached name/difficulty/release
                 points = _scoreboard_points(scraper, code)
+                cache[code]["points"] = points
+                cache[code]["points_fetched_at"] = datetime.now().isoformat()
             else:
-                points = 0
+                # Full fetch: details + scoreboard
+                details_data = safe_get(scraper, f"{BASE_URL}/rooms/details?roomCode={code}")
+                if details_data and details_data.get("status") == "success":
+                    name, diff, api_date = _parse_room_details(details_data)
+                    release = api_date or (sitemap_dates or {}).get(code, "")
+                    is_placeholder = False
+                else:
+                    name, diff, release = code, "unknown", (sitemap_dates or {}).get(code, "")
+                    is_placeholder = True
 
-            cache[code] = {
-                "name":        name,
-                "difficulty":  diff,
-                "points":      points,
-                "release":     release,
-                "placeholder": is_placeholder,
-            }
+                time.sleep(0.4 + random.uniform(0, 0.2))
+
+                points = _scoreboard_points(scraper, code) if not is_placeholder else 0
+                cache[code] = {
+                    "name":              name,
+                    "difficulty":        diff,
+                    "points":            points,
+                    "release":           release,
+                    "placeholder":       is_placeholder,
+                    "points_fetched_at": datetime.now().isoformat(),
+                }
 
             prog.advance(task)
 
