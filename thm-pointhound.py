@@ -4,7 +4,7 @@ THM PointHound — rank your uncompleted TryHackMe labs by point value.
 
 Usage:
     python thm-pointhound.py <username> [--top N] [--difficulty TIER] [--min-points P]
-                             [--no-cache] [--cookie SID]
+                             [--max-points P] [--quick-wins] [--no-cache] [--cookie SID]
 """
 
 import re
@@ -29,10 +29,9 @@ console = Console()
 BASE_URL          = "https://tryhackme.com/api/v2"
 ROOMS_SITEMAP_URL = "https://tryhackme.com/sitemaps/rooms.xml"
 
-CACHE_DIR          = Path.home() / ".cache" / "thm_pointhound"
+CACHE_DIR          = Path(__file__).parent / ".cache"
 SITEMAP_CACHE      = CACHE_DIR / "sitemap_codes.json"
 DETAILS_CACHE      = CACHE_DIR / "room_details.json"
-OVERRIDES_FILE     = CACHE_DIR / "manual_done.json"
 SITEMAP_TTL_HOURS  = 24      # re-fetch sitemap daily
 DETAILS_SAVE_EVERY = 50      # persist cache every N rooms fetched
 POINTS_TTL_DAYS    = 7       # re-fetch scoreboard after this many days
@@ -200,6 +199,18 @@ def load_details_cache() -> dict:
     if DETAILS_CACHE.exists():
         payload = _load_json(DETAILS_CACHE)
         if isinstance(payload, dict):
+            now = datetime.now().isoformat()
+            migrated = any(
+                entry.get("points", 0) > 0
+                and not entry.get("placeholder")
+                and "points_fetched_at" not in entry
+                for entry in payload.values()
+            )
+            if migrated:
+                for entry in payload.values():
+                    if entry.get("points", 0) > 0 and not entry.get("placeholder"):
+                        entry.setdefault("points_fetched_at", now)
+                save_details_cache(payload)
             return payload
     return {}
 
@@ -219,21 +230,23 @@ def _points_stale(entry: dict) -> bool:
         return True
 
 
-def _parse_room_details(data: dict) -> tuple[str, str, str, int]:
-    """Return (name, difficulty, release_date_iso, score_type) from a rooms/details API response.
+def _parse_room_details(data: dict) -> tuple[str, str, str, int, str]:
+    """Return (name, difficulty, release_date_iso, score_type, room_type).
     score_type 1 = fixed-value walkthrough; 0 = per-flag challenge room.
+    room_type mirrors the API 'type' field, e.g. 'challenge', 'walkthrough'.
     """
     d = data.get("data", {})
     name       = d.get("title") or d.get("name") or ""
     diff       = str(d.get("difficulty") or "unknown").lower()
     score_type = int(d.get("scoreType", 1))
+    room_type  = str(d.get("type") or "").lower()
     release    = ""
     for key in ("createdAt", "created", "publishedAt", "releaseDate", "addedAt", "updatedAt"):
         v = d.get(key)
         if v and isinstance(v, str) and len(v) >= 10:
             release = v[:10]
             break
-    return name, diff, release, score_type
+    return name, diff, release, score_type, room_type
 
 
 # Patterns in THM room RSC/HTML that confirm the *current user* finished the room.
@@ -327,7 +340,7 @@ def get_all_room_details(scraper, codes: list[str], sitemap_dates: dict[str, str
     missing = [
         c for c in codes
         if c not in cache
-        or (cache[c].get("name") == c and cache[c].get("points") == 0)
+        or (not cache[c].get("placeholder") and cache[c].get("name") == c and cache[c].get("points") == 0)
     ]
     stale = [
         c for c in codes
@@ -370,11 +383,11 @@ def get_all_room_details(scraper, codes: list[str], sitemap_dates: dict[str, str
                 # Full fetch: details + scoreboard
                 details_data = safe_get(scraper, f"{BASE_URL}/rooms/details?roomCode={code}")
                 if details_data and details_data.get("status") == "success":
-                    name, diff, api_date, score_type = _parse_room_details(details_data)
+                    name, diff, api_date, score_type, room_type = _parse_room_details(details_data)
                     release = api_date or (sitemap_dates or {}).get(code, "")
                     is_placeholder = False
                 else:
-                    name, diff, release, score_type = code, "unknown", (sitemap_dates or {}).get(code, ""), 1
+                    name, diff, release, score_type, room_type = code, "unknown", (sitemap_dates or {}).get(code, ""), 1, ""
                     is_placeholder = True
 
                 time.sleep(0.4 + random.uniform(0, 0.2))
@@ -387,6 +400,7 @@ def get_all_room_details(scraper, codes: list[str], sitemap_dates: dict[str, str
                     "release":           release,
                     "placeholder":       is_placeholder,
                     "score_type":        score_type,
+                    "room_type":         room_type,
                     "points_fetched_at": datetime.now().isoformat(),
                 }
 
@@ -405,18 +419,20 @@ def get_all_room_details(scraper, codes: list[str], sitemap_dates: dict[str, str
 # User's completed rooms
 # ---------------------------------------------------------------------------
 
-def load_overrides() -> set[str]:
-    """Load manually-marked-done room codes from the local override file."""
-    if OVERRIDES_FILE.exists():
-        data = _load_json(OVERRIDES_FILE)
+def load_overrides(username: str) -> set[str]:
+    """Load manually-marked-done room codes for a specific user."""
+    path = CACHE_DIR / f"manual_done_{username}.json"
+    if path.exists():
+        data = _load_json(path)
         if isinstance(data, list):
             return {c.lower() for c in data}
     return set()
 
 
-def save_overrides(codes: set[str]):
+def save_overrides(codes: set[str], username: str):
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    OVERRIDES_FILE.write_text(json.dumps(sorted(codes)))
+    path = CACHE_DIR / f"manual_done_{username}.json"
+    path.write_text(json.dumps(sorted(codes)))
 
 
 def get_completed_rooms(scraper, username: str, debug: bool = False) -> tuple[set[str], set[str]]:
@@ -482,6 +498,16 @@ def main():
                         help="Filter by difficulty")
     parser.add_argument("--min-points", type=int, default=0, metavar="P",
                         help="Exclude rooms below P points")
+    parser.add_argument("--max-points", type=int, default=None, metavar="P",
+                        help="Exclude rooms above P points")
+    parser.add_argument("--quick-wins", action="store_true",
+                        help="Show a second table of easy + medium rooms within the points range")
+    parser.add_argument("--no-ctf", action="store_true",
+                        help="Exclude CTF/challenge rooms (per-flag scoring) — keeps guided walkthroughs only")
+    parser.add_argument("--soc", action="store_true",
+                        help="Show SOC Simulator scenarios table")
+    parser.add_argument("--paywalled", action="store_true",
+                        help="Show paywalled/unlisted rooms table")
     parser.add_argument("--no-cache", action="store_true",
                         help="Force fresh fetch of sitemap + room details")
     parser.add_argument("--cookie",  metavar="SID",
@@ -500,7 +526,7 @@ def main():
     scraper = make_scraper(session_cookie=args.cookie)
 
     # Handle --mark-done / --list-done before hitting any API
-    overrides = load_overrides()
+    overrides = load_overrides(args.username)
     if args.mark_done:
         # Build name->code lookup from local cache so users can pass room names
         cache = load_details_cache()
@@ -519,7 +545,7 @@ def main():
             else:
                 new_codes.add(inp_lower)
         overrides |= new_codes
-        save_overrides(overrides)
+        save_overrides(overrides, args.username)
         console.print(f"[green]✓[/green] Marked as done: {', '.join(sorted(new_codes))}")
         console.print(f"[dim]Total manual overrides: {len(overrides)}[/dim]")
         return
@@ -579,27 +605,35 @@ def main():
     # 5. Fetch / load details for all uncompleted rooms
     details = get_all_room_details(scraper, uncompleted_codes, sitemap_dates=sitemap_dates, force=args.no_cache)
 
-    # 6. Build, filter, sort — skip placeholders and title-matched rooms
-    uncompleted = []
+    # 6. Build accessible room list — skip placeholders only
+    all_rooms = []
     placeholder_rooms = []
     for code in uncompleted_codes:
         d = details.get(code, {})
         if d.get("placeholder"):
             placeholder_rooms.append({"code": code, "release": d.get("release", "")})
             continue
-        name = d.get("name") or code
-        diff   = d.get("difficulty", "unknown")
-        points = d.get("points", 0)
-        release = d.get("release", "")
-        if args.difficulty and diff != args.difficulty:
-            continue
-        if points < args.min_points:
-            continue
-        uncompleted.append({
-            "name": name, "code": code, "points": points,
-            "difficulty": diff, "release": release,
+        all_rooms.append({
+            "name":       d.get("name") or code,
+            "code":       code,
+            "points":     d.get("points", 0),
+            "difficulty": d.get("difficulty", "unknown"),
+            "release":    d.get("release", ""),
+            "score_type": d.get("score_type", 1),
+            "room_type":  d.get("room_type", ""),
         })
 
+    # Apply main table filters
+    def is_ctf(r):
+        return r["score_type"] == 0 or r["room_type"] == "challenge"
+
+    uncompleted = [
+        r for r in all_rooms
+        if (not args.difficulty or r["difficulty"] == args.difficulty)
+        and r["points"] >= args.min_points
+        and (args.max_points is None or r["points"] <= args.max_points)
+        and (not args.no_ctf or not is_ctf(r))
+    ]
     uncompleted.sort(key=lambda x: x["points"], reverse=True)
 
     # 6b. Optional page-level verification — catches API-missed completions
@@ -624,7 +658,7 @@ def main():
 
             if auto_done:
                 overrides |= set(auto_done)
-                save_overrides(overrides)
+                save_overrides(overrides, args.username)
                 console.print(
                     f"\n[green]✓ Auto-marked as completed (saved to overrides):[/green] "
                     + ", ".join(auto_done)
@@ -634,97 +668,130 @@ def main():
 
     # 7. Summary
     total_for_pct       = platform_total or len(all_codes)
-    total_pts_remaining = sum(r["points"] for r in uncompleted)
+    total_pts_remaining = sum(r["points"] for r in all_rooms)
     paywalled_count     = len(placeholder_rooms)
     effective_done      = len(completed_codes) + paywalled_count
     pct_done            = effective_done / total_for_pct * 100 if total_for_pct else 0
 
-    console.print("\n[bold]Your Progress[/bold]")
+    console.print()
+    console.rule("[bold]Progress[/bold]", style="bright_black")
     console.print(
-        f"  Completed : [bold green]{effective_done:>4}[/bold green]"
-        f" / {total_for_pct} hands-on labs  ({pct_done:.1f}%)"
+        f"\n  Completed    [bold green]{effective_done:>4}[/bold green] / {total_for_pct}"
+        f"  [dim]({pct_done:.1f}%)[/dim]"
     )
     if paywalled_count:
         console.print(
-            f"  [dim]  └─ {len(completed_codes)} completed  ·  "
-            f"{paywalled_count} paywalled (business plan)[/dim]"
+            f"  [dim]           └─ {len(completed_codes)} completed · {paywalled_count} paywalled[/dim]"
         )
-    console.print(f"  Remaining : [bold]{len(uncompleted):>4}[/bold] accessible labs")
-    console.print(f"  Points available : [bold yellow]{total_pts_remaining:,}[/bold yellow]\n")
+    console.print(f"  Remaining    [bold]{len(all_rooms):>4}[/bold] accessible labs")
+    console.print(f"  Points left  [bold yellow]{total_pts_remaining:,}[/bold yellow]\n")
 
     # 8. Main table
     display = uncompleted[:args.top]
+    console.print()
+    console.rule(f"[bold cyan] Top {len(display)} Uncompleted Labs — Highest Points First [/bold cyan]", style="cyan")
+    console.print()
     if display:
-        table = Table(
-            title=f"Top {len(display)} Uncompleted Labs — Highest Points First",
-            show_lines=False, header_style="bold", box=box.SIMPLE_HEAD,
-        )
+        table = Table(show_lines=False, header_style="bold", box=box.SIMPLE_HEAD, padding=(0, 1))
         table.add_column("#",          style="dim", width=4, justify="right")
-        table.add_column("Lab Name",   min_width=32)
+        table.add_column("URL",        style="cyan", no_wrap=True, min_width=40)
         table.add_column("Pts",        justify="right", style="bold yellow", width=6)
         table.add_column("Difficulty", width=10)
         table.add_column("Age",        width=7, justify="right", style="dim")
-        table.add_column("URL",        style="dim cyan")
 
         for i, room in enumerate(display, 1):
+            url = f"https://tryhackme.com/room/{room['code']}"
             table.add_row(
-                str(i),
-                room["name"],
-                str(room["points"]),
+                str(i), url, str(room["points"]),
                 styled_diff(room["difficulty"]),
                 days_old(room.get("release", "")),
-                f"https://tryhackme.com/room/{room['code']}",
             )
         console.print(table)
     else:
         console.print("[yellow]No uncompleted rooms match your current filters.[/yellow]")
 
-    # 9. SOC Simulator scenarios
-    console.print("\n[bold]Fetching SOC Simulator scenarios…[/bold]")
-    scenarios = fetch_soc_scenarios(scraper)
-    if scenarios:
-        soc = Table(
-            title=f"SOC Simulator Scenarios ({len(scenarios)}) — Ranked by XP",
-            show_lines=False, header_style="bold", box=box.SIMPLE_HEAD,
-        )
-        soc.add_column("#",          style="dim", width=4, justify="right")
-        soc.add_column("Scenario",   min_width=30)
-        soc.add_column("XP",         justify="right", style="bold yellow", width=6)
-        soc.add_column("Difficulty", width=10)
-        soc.add_column("Age",        width=7, justify="right", style="dim")
-
-        for i, sc in enumerate(scenarios, 1):
-            diff = str(sc.get("difficulty", "unknown")).lower()
-            created = (sc.get("_createdAt") or sc.get("createdAt") or "")[:10]
-            soc.add_row(
-                str(i), sc.get("title", "Unknown"),
-                str(sc.get("experience_points", 0)),
-                styled_diff(diff),
-                days_old(created),
+    # 9. Quick wins table
+    if args.quick_wins:
+        quick_wins = [
+            r for r in all_rooms
+            if r["difficulty"] in ("easy", "medium")
+            and r["points"] >= args.min_points
+            and (args.max_points is None or r["points"] <= args.max_points)
+            and not is_ctf(r)
+        ]
+        quick_wins.sort(key=lambda x: x["points"], reverse=True)
+        console.print()
+        if quick_wins:
+            range_parts = []
+            if args.min_points:
+                range_parts.append(f"≥{args.min_points} pts")
+            if args.max_points is not None:
+                range_parts.append(f"≤{args.max_points} pts")
+            range_label = f"  {' · '.join(range_parts)}" if range_parts else ""
+            console.rule(
+                f"[bold green] Quick Wins — Easy + Medium{range_label}  ·  {len(quick_wins)} rooms [/bold green]",
+                style="green",
             )
-        console.print(soc)
-        console.print(
-            "[dim]SOC Simulator requires a premium subscription. "
-            "Access at: https://tryhackme.com/soc-sim[/dim]\n"
-        )
+            console.print()
+            qw_table = Table(show_lines=False, header_style="bold", box=box.SIMPLE_HEAD, padding=(0, 1))
+            qw_table.add_column("#",          style="dim", width=4, justify="right")
+            qw_table.add_column("URL",        style="cyan", no_wrap=True, min_width=40)
+            qw_table.add_column("Pts",        justify="right", style="bold yellow", width=6)
+            qw_table.add_column("Difficulty", width=10)
+            qw_table.add_column("Age",        width=7, justify="right", style="dim")
+            for i, room in enumerate(quick_wins, 1):
+                url = f"https://tryhackme.com/room/{room['code']}"
+                qw_table.add_row(
+                    str(i), url, str(room["points"]),
+                    styled_diff(room["difficulty"]),
+                    days_old(room.get("release", "")),
+                )
+            console.print(qw_table)
+        else:
+            console.rule("[bold green] Quick Wins [/bold green]", style="green")
+            console.print("\n[yellow]No easy/medium rooms match the specified points range.[/yellow]")
 
-    if placeholder_rooms:
-        plh = Table(
-            title=f"Unlisted / Unreleased Rooms ({len(placeholder_rooms)}) — No API data; may be paywalled or upcoming",
-            show_lines=False, header_style="bold", box=box.SIMPLE_HEAD,
+    # 10. SOC Simulator scenarios (opt-in)
+    if args.soc:
+        scenarios = fetch_soc_scenarios(scraper)
+        if scenarios:
+            console.print()
+            console.rule(f"[bold magenta] SOC Simulator Scenarios — Ranked by XP [/bold magenta]", style="magenta")
+            console.print()
+            soc = Table(show_lines=False, header_style="bold", box=box.SIMPLE_HEAD, padding=(0, 1))
+            soc.add_column("#",          style="dim", width=4, justify="right")
+            soc.add_column("Scenario",   min_width=30)
+            soc.add_column("XP",         justify="right", style="bold yellow", width=6)
+            soc.add_column("Difficulty", width=10)
+            soc.add_column("Age",        width=7, justify="right", style="dim")
+            for i, sc in enumerate(scenarios, 1):
+                diff = str(sc.get("difficulty", "unknown")).lower()
+                created = (sc.get("_createdAt") or sc.get("createdAt") or "")[:10]
+                soc.add_row(
+                    str(i), sc.get("title", "Unknown"),
+                    str(sc.get("experience_points", 0)),
+                    styled_diff(diff), days_old(created),
+                )
+            console.print(soc)
+            console.print("[dim]Requires premium · https://tryhackme.com/soc-sim[/dim]\n")
+
+    # 11. Paywalled/unlisted rooms (opt-in)
+    if args.paywalled and placeholder_rooms:
+        console.print()
+        console.rule(
+            f"[bold yellow] Paywalled / Unlisted Rooms — {len(placeholder_rooms)} rooms [/bold yellow]",
+            style="yellow",
         )
+        console.print()
+        plh = Table(show_lines=False, header_style="bold", box=box.SIMPLE_HEAD, padding=(0, 1))
         plh.add_column("#",         style="dim", width=4, justify="right")
         plh.add_column("Room Code", min_width=32)
         plh.add_column("Age",       width=7, justify="right", style="dim")
-        plh.add_column("URL",       style="dim cyan")
         for i, room in enumerate(placeholder_rooms, 1):
-            plh.add_row(
-                str(i), room["code"],
-                days_old(room["release"]),
-                f"https://tryhackme.com/room/{room['code']}",
-            )
+            url = f"https://tryhackme.com/room/{room['code']}"
+            plh.add_row(str(i), f"[link={url}]{room['code']}[/link]", days_old(room["release"]))
         console.print(plh)
-        console.print("[dim]Links may redirect or require a paid business plan.[/dim]\n")
+        console.print("[dim]May redirect or require a business plan.[/dim]\n")
 
 
 if __name__ == "__main__":

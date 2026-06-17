@@ -1,6 +1,6 @@
 # THM PointHound
 
-Dynamically fetches every public TryHackMe room, diffs it against your completed list, and ranks what's left by point value so you always know the highest-value lab to hit next.
+Fetches every public TryHackMe room, diffs it against your completed list, and ranks what's left by point value — so you always know the highest-value lab to hit next.
 
 ---
 
@@ -16,85 +16,158 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-**Staying current:** Pull the latest changes any time with:
+**Staying current:**
 
 ```bash
 git pull
 ```
 
-No reinstall needed unless `requirements.txt` changes (it rarely does).
+No reinstall needed unless `requirements.txt` changes.
 
 ---
 
 ## Getting Your `connect.sid` Cookie
 
-Required for every run to bypass TryHackMe's bot detection.
+Required on every run to bypass TryHackMe's bot detection.
 
 1. Log in to [tryhackme.com](https://tryhackme.com) in your browser
-2. Press `F12` to open DevTools
-3. Go to **Application** -> **Cookies** -> `https://tryhackme.com`
-4. Find the cookie named `connect.sid` and copy its **Value**
+2. Press `F12` → **Application** → **Cookies** → `https://tryhackme.com`
+3. Copy the **Value** of `connect.sid`
 
-> Treat this like a password. It authenticates as you.
+> Treat this like a password — it authenticates as you on the platform.
 
 ---
 
-## Usage
+## Basic Usage
 
 ```bash
 python thm-pointhound.py <username> --cookie '<your connect.sid>'
 ```
 
-### Arguments
+This fetches the full room list, diffs it against your completions, and prints the **top 50 uncompleted rooms by point value**.
+
+---
+
+## All Flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `username` | required | Your TryHackMe username |
+| `username` | required | TryHackMe username to look up |
 | `--cookie SID` | required | `connect.sid` session cookie |
-| `--top N` | 50 | Show top N uncompleted rooms |
-| `--difficulty` | all | Filter by `easy`, `medium`, `hard`, `insane`, or `info` |
-| `--min-points P` | 0 | Hide rooms worth less than P points |
-| `--no-cache` | off | Force a fresh fetch of room data |
-| `--verify` | off | Attempt to detect completions the API missed by scraping room pages |
-| `--mark-done NAME [NAME ...]` | off | Manually mark a room as completed. Accepts the room name or code |
-| `--list-done` | off | Show all manually marked rooms |
+| `--top N` | 50 | Show top N rooms in the main table |
+| `--difficulty` | all | Filter main table to `easy`, `medium`, `hard`, `insane`, or `info` |
+| `--min-points P` | 0 | Exclude rooms worth less than P points |
+| `--max-points P` | off | Exclude rooms worth more than P points |
+| `--no-ctf` | off | Exclude CTF/challenge rooms from the main table |
+| `--quick-wins` | off | Show a second table: easy + medium walkthrough rooms within the points range |
+| `--soc` | off | Show the SOC Simulator scenarios table |
+| `--paywalled` | off | Show paywalled/unlisted rooms (business plan content) |
+| `--no-cache` | off | Force a full re-fetch of all room data (slow — avoid unless needed) |
+| `--verify` | off | Scrape each room page to catch completions the API missed (requires `--cookie`) |
+| `--mark-done NAME` | off | Manually mark a room as completed by name or code |
+| `--list-done` | off | List all manually marked rooms |
 | `--debug` | off | Print raw API fields for troubleshooting |
 
-### Examples
+---
+
+## Examples
 
 ```bash
-# Standard run
+# Standard run — top 50 uncompleted rooms by points
 python thm-pointhound.py KaliMax --cookie 's:abc123...'
 
-# Top 10 hard rooms only
-python thm-pointhound.py KaliMax --cookie 's:abc123...' --top 10 --difficulty hard
+# Top 20 hard rooms only
+python thm-pointhound.py KaliMax --cookie 's:abc123...' --top 20 --difficulty hard
 
-# Skip rooms under 100 pts, force fresh data
-python thm-pointhound.py KaliMax --cookie 's:abc123...' --min-points 100 --no-cache
+# Exclude CTF rooms, show only rooms above 100 pts
+python thm-pointhound.py KaliMax --cookie 's:abc123...' --min-points 100 --no-ctf
 
-# Mark a room done by name (no need to know the room code)
-python thm-pointhound.py KaliMax --mark-done "Defensive Security Intro"
-python thm-pointhound.py KaliMax --mark-done hydra sustah
+# Quick wins: easy + medium walkthroughs between 60 and 250 pts
+python thm-pointhound.py KaliMax --cookie 's:abc123...' --quick-wins --min-points 60 --max-points 250
+
+# Full output: main table + quick wins + SOC scenarios + paywalled rooms
+python thm-pointhound.py KaliMax --cookie 's:abc123...' --quick-wins --soc --paywalled
+
+# Run for another user (shares the room detail cache — only fetches their uncompleted rooms)
+python thm-pointhound.py Christie994 --cookie 's:abc123...'
+```
+
+---
+
+## Quick Wins Table
+
+`--quick-wins` appends a focused table below the main one. It always:
+
+- Filters to **easy and medium** rooms only
+- Excludes **CTF/challenge rooms** (per-flag scoring — time-consuming regardless of difficulty)
+- Respects `--min-points` and `--max-points` to define the points range
+- Sorts by points descending and shows all matches within the range
+
+Use it to identify low-effort, good-value labs when you want to grind points without a heavy time commitment:
+
+```bash
+python thm-pointhound.py KaliMax --cookie '...' --quick-wins --min-points 60 --max-points 250
 ```
 
 ---
 
 ## How Points Are Calculated
 
-THM does not expose a direct points-per-room API. Points are derived from the room's public scoreboard (`/api/v2/rooms/scoreboard`), which shows the scores of the top 100 completions.
+THM has no direct points-per-room API. Points are read from each room's public scoreboard (`/api/v2/rooms/scoreboard`), which shows the top 100 completion scores.
 
-TryHackMe uses two scoring models, and the tool handles each differently:
+Two scoring models exist and are handled differently:
 
-**Walkthrough rooms** (linear, single point value) use `min()` of scoreboard scores. When THM nerfs a room's point value, players who completed it before the change keep their original higher score. New completions reflect the lower current value. `min()` always returns what the room is worth today.
+**Walkthrough rooms** (linear, single point value) use `min()` of scoreboard scores. When THM reduces a room's value, old completions retain the higher historical score — `min()` always reflects the current value new completers would earn.
 
-**Challenge rooms** (CTF-style, points per flag) use `mode()` of scoreboard scores. Players earn points for each flag they solve, so scores vary based on how many flags were captured. `mode()` returns the most common total, which represents a standard full completion.
+**Challenge rooms** (CTF-style, points per flag) use `mode()`. Scores vary by how many flags were captured, so `mode()` captures the most common full-completion total.
 
-Room point values are cached and automatically refreshed every 7 days to stay current with any changes THM makes.
+Point values are cached and **refreshed every 7 days** automatically.
+
+---
+
+## Cache
+
+Room data is cached in `.cache/` inside the project directory (git-ignored). Three files:
+
+| File | Scope | TTL |
+|------|-------|-----|
+| `sitemap_codes.json` | All room codes from the sitemap | 24 hours |
+| `room_details.json` | Name, difficulty, points, type — shared across all usernames | Points refresh every 7 days |
+| `manual_done_<username>.json` | Your `--mark-done` overrides | Permanent until removed |
+
+**The room details cache is shared across usernames on the same machine.** Running the tool for a user with many uncompleted rooms (first run can take 10–15 minutes) warms the cache for everyone on that machine. Subsequent runs skip already-cached rooms and complete in seconds.
+
+> **Note for new installs:** The cache is not included in the repo (it's git-ignored). Every fresh clone starts cold — expect a slow first run while room details are fetched. After that, runs are fast.
+
+To clear everything and start fresh:
+
+```bash
+rm -rf .cache/
+```
+
+---
+
+## Handling Missed Completions
+
+TryHackMe's completion API sometimes misses rooms finished via learning paths. Two ways to fix this:
+
+**Option 1 — Manual override** (instant, permanent):
+```bash
+python thm-pointhound.py KaliMax --mark-done "Defensive Security Intro"
+python thm-pointhound.py KaliMax --mark-done hydra sustah
+python thm-pointhound.py KaliMax --list-done
+```
+
+**Option 2 — Page verification** (thorough but slow — checks every uncompleted room):
+```bash
+python thm-pointhound.py KaliMax --cookie '...' --verify
+```
+Any rooms confirmed as completed are auto-saved to your overrides file.
 
 ---
 
 ## Notes
 
-- **First run is slow.** Room details are fetched one at a time to avoid rate limits. All subsequent runs use a local cache at `~/.cache/thm_pointhound/`.
-- **Learning path completions** are not returned by TryHackMe's completion API. This is a known platform limitation. Use `--mark-done "Room Name"` to flag any room that shows as uncompleted when you know you have finished it. The room name from the output table works directly.
-- **Business plan rooms** (AWS, Azure, XDR, Sentinel labs) appear in the sitemap but are paywalled. They are listed separately at the bottom so you can evaluate the cost/benefit.
+- **Business plan rooms** (AWS, Azure, XDR, Sentinel labs) appear in the sitemap but return no API data. They are hidden by default and shown with `--paywalled`.
+- **Completed rooms for other users** are fetched from a public API endpoint — no special auth needed beyond your cookie for bot detection.
+- **Bot detection:** THM uses Vercel bot protection. `cloudscraper` handles the challenge automatically. If fetches start failing, the `browser` config in `make_scraper()` may need a newer Chrome version string.
