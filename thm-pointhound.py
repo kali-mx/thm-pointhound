@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-THM PointHound — rank your uncompleted TryHackMe labs by point value.
+THM PointHound - rank your uncompleted TryHackMe labs by point value.
 
 Usage:
     python thm-pointhound.py <username> [--top N] [--difficulty TIER] [--min-points P]
@@ -80,7 +80,7 @@ def safe_get(scraper, url, retries=3, base_delay=2.0):
                     return None
             if resp.status_code == 429:
                 delay = base_delay * (2 ** attempt) + random.uniform(1, 3)
-                console.print(f"[yellow]Rate limited — waiting {delay:.1f}s[/yellow]")
+                console.print(f"[yellow]Rate limited - waiting {delay:.1f}s[/yellow]")
                 time.sleep(delay)
                 continue
             return None
@@ -127,7 +127,7 @@ def print_platform_banner(stats):
 
 
 # ---------------------------------------------------------------------------
-# Room codes — from the rooms sitemap
+# Room codes - from the rooms sitemap
 # ---------------------------------------------------------------------------
 
 def _load_json(path: Path):
@@ -175,7 +175,7 @@ def get_room_codes(scraper, force=False) -> tuple[list[str], dict[str, str]]:
         loc_m  = re.search(r'tryhackme\.com/room/([a-zA-Z0-9_\-]+)', block.group(1))
         date_m = re.search(r'<lastmod>([^<]+)</lastmod>', block.group(1))
         if loc_m:
-            code = loc_m.group(1)          # preserve original case — AoC codes are mixed-case
+            code = loc_m.group(1)          # preserve original case - AoC codes are mixed-case
             if code.lower() not in {k.lower() for k in lastmod}:   # dedupe case-insensitively
                 codes.append(code)
                 lastmod[code] = date_m.group(1).strip()[:10] if date_m else ""
@@ -192,7 +192,7 @@ def get_room_codes(scraper, force=False) -> tuple[list[str], dict[str, str]]:
 
 
 # ---------------------------------------------------------------------------
-# Room details — fetched per-room, cached indefinitely
+# Room details - fetched per-room, cached indefinitely
 # ---------------------------------------------------------------------------
 
 def load_details_cache() -> dict:
@@ -250,7 +250,7 @@ def _parse_room_details(data: dict) -> tuple[str, str, str, int, str]:
 
 
 # Patterns in THM room RSC/HTML that confirm the *current user* finished the room.
-# Deliberately conservative — "completed":true at field level, or the exact
+# Deliberately conservative - "completed":true at field level, or the exact
 # progress-bar phrase THM renders. Avoid broad matches that appear in descriptions.
 _DONE_PATTERNS = [
     rb'"isCompleted"\s*:\s*true',
@@ -268,15 +268,15 @@ def verify_room_completion(scraper, code: str) -> bool:
     """
     url = f"https://tryhackme.com/room/{code}"
     for hdrs in [
-        # RSC stream — structured, faster to scan
+        # RSC stream - structured, faster to scan
         {**HEADERS, "accept": "text/x-component", "RSC": "1",
          "Next-Router-Prefetch": "1", "Next-Url": f"/room/{code}"},
-        # Full HTML — fallback
+        # Full HTML - fallback
         HTML_HEADERS,
     ]:
         try:
             resp = scraper.get(url, headers=hdrs, timeout=20)
-            body = resp.content          # bytes — avoid re-encoding issues
+            body = resp.content          # bytes - avoid re-encoding issues
             for pat in _DONE_PATTERNS:
                 if re.search(pat, body, re.IGNORECASE):
                     return True
@@ -374,7 +374,7 @@ def get_all_room_details(scraper, codes: list[str], sitemap_dates: dict[str, str
 
         for i, code in enumerate(to_fetch):
             if code in stale_set:
-                # Points-only refresh — reuse cached name/difficulty/release/score_type
+                # Points-only refresh - reuse cached name/difficulty/release/score_type
                 score_type = cache[code].get("score_type", 1)
                 points = _scoreboard_points(scraper, code, score_type)
                 cache[code]["points"] = points
@@ -437,7 +437,7 @@ def save_overrides(codes: set[str], username: str):
 
 def get_completed_rooms(scraper, username: str, debug: bool = False) -> tuple[set[str], set[str]]:
     """
-    Returns (completed_codes, completed_titles) — both lowercased.
+    Returns (completed_codes, completed_titles) - both lowercased.
     We match on both because THM occasionally changes room codes; title is more stable.
     """
     url = f"{BASE_URL}/public-profile/completed-rooms?username={username}&limit=10000&page=1"
@@ -451,11 +451,11 @@ def get_completed_rooms(scraper, username: str, debug: bool = False) -> tuple[se
     docs = (data.get("data") or {}).get("docs", [])
 
     if debug and docs:
-        console.print("\n[bold yellow]DEBUG — raw completed-room doc fields (first 3):[/bold yellow]")
+        console.print("\n[bold yellow]DEBUG - raw completed-room doc fields (first 3):[/bold yellow]")
         for doc in docs[:3]:
             console.print(f"  keys: {list(doc.keys())}")
             console.print(f"  sample: {dict(list(doc.items())[:6])}")
-        console.print("\n[bold yellow]DEBUG — sample of completed codes (first 30):[/bold yellow]")
+        console.print("\n[bold yellow]DEBUG - sample of completed codes (first 30):[/bold yellow]")
         sample_codes = sorted({r.get("code","").lower() for r in docs if r.get("code")})[:30]
         for i in range(0, len(sample_codes), 5):
             console.print("  " + "  ".join(sample_codes[i:i+5]))
@@ -503,7 +503,7 @@ def main():
     parser.add_argument("--quick-wins", action="store_true",
                         help="Show a second table of easy + medium rooms within the points range")
     parser.add_argument("--no-ctf", action="store_true",
-                        help="Exclude CTF/challenge rooms (per-flag scoring) — keeps guided walkthroughs only")
+                        help="Exclude CTF/challenge rooms (per-flag scoring) - keeps guided walkthroughs only")
     parser.add_argument("--soc", action="store_true",
                         help="Show SOC Simulator scenarios table")
     parser.add_argument("--paywalled", action="store_true",
@@ -520,7 +520,7 @@ def main():
                         help="Show manually marked-done overrides and exit")
     parser.add_argument("--verify",   action="store_true",
                         help="For each uncompleted room, fetch its page and check for "
-                             "'Room completed 100%%' — auto-saves any found to --mark-done")
+                             "'Room completed 100%%' - auto-saves any found to --mark-done")
     args = parser.parse_args()
 
     scraper = make_scraper(session_cookie=args.cookie)
@@ -585,7 +585,7 @@ def main():
 
     if args.debug:
         check = ["hydra", "sustah", "splunk2gcd5", "splunk 2", "hydra brute force"]
-        console.print("\n[bold yellow]DEBUG — spot-check codes + titles in completed set:[/bold yellow]")
+        console.print("\n[bold yellow]DEBUG - spot-check codes + titles in completed set:[/bold yellow]")
         for c in check:
             in_codes  = c in completed_codes
             in_titles = c in completed_titles
@@ -599,13 +599,13 @@ def main():
         completed_codes |= overrides
         completed_titles |= {o.lower() for o in overrides}
 
-    # 4. Identify uncompleted codes — match on code OR title (handles recodified rooms)
+    # 4. Identify uncompleted codes - match on code OR title (handles recodified rooms)
     uncompleted_codes = [c for c in all_codes if c.lower() not in completed_codes]
 
     # 5. Fetch / load details for all uncompleted rooms
     details = get_all_room_details(scraper, uncompleted_codes, sitemap_dates=sitemap_dates, force=args.no_cache)
 
-    # 6. Build accessible room list — skip placeholders only
+    # 6. Build accessible room list - skip placeholders only
     all_rooms = []
     placeholder_rooms = []
     for code in uncompleted_codes:
@@ -636,7 +636,7 @@ def main():
     ]
     uncompleted.sort(key=lambda x: x["points"], reverse=True)
 
-    # 6b. Optional page-level verification — catches API-missed completions
+    # 6b. Optional page-level verification - catches API-missed completions
     if args.verify:
         if not args.cookie:
             console.print("[yellow]--verify requires --cookie to check authenticated room pages.[/yellow]")
@@ -689,7 +689,7 @@ def main():
     # 8. Main table
     display = uncompleted[:args.top]
     console.print()
-    console.rule(f"[bold cyan] Top {len(display)} Uncompleted Labs — Highest Points First [/bold cyan]", style="cyan")
+    console.rule(f"[bold cyan] Top {len(display)} Uncompleted Labs - Highest Points First [/bold cyan]", style="cyan")
     console.print()
     if display:
         table = Table(show_lines=False, header_style="bold", box=box.SIMPLE_HEAD, padding=(0, 1))
@@ -729,7 +729,7 @@ def main():
                 range_parts.append(f"≤{args.max_points} pts")
             range_label = f"  {' · '.join(range_parts)}" if range_parts else ""
             console.rule(
-                f"[bold green] Quick Wins — Easy + Medium{range_label}  ·  {len(quick_wins)} rooms [/bold green]",
+                f"[bold green] Quick Wins - Easy + Medium{range_label}  ·  {len(quick_wins)} rooms [/bold green]",
                 style="green",
             )
             console.print()
@@ -756,7 +756,7 @@ def main():
         scenarios = fetch_soc_scenarios(scraper)
         if scenarios:
             console.print()
-            console.rule(f"[bold magenta] SOC Simulator Scenarios — Ranked by XP [/bold magenta]", style="magenta")
+            console.rule(f"[bold magenta] SOC Simulator Scenarios - Ranked by XP [/bold magenta]", style="magenta")
             console.print()
             soc = Table(show_lines=False, header_style="bold", box=box.SIMPLE_HEAD, padding=(0, 1))
             soc.add_column("#",          style="dim", width=4, justify="right")
@@ -779,7 +779,7 @@ def main():
     if args.paywalled and placeholder_rooms:
         console.print()
         console.rule(
-            f"[bold yellow] Paywalled / Unlisted Rooms — {len(placeholder_rooms)} rooms [/bold yellow]",
+            f"[bold yellow] Paywalled / Unlisted Rooms - {len(placeholder_rooms)} rooms [/bold yellow]",
             style="yellow",
         )
         console.print()
