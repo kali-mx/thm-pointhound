@@ -43,7 +43,7 @@ HEADERS = {
     "referer": "https://tryhackme.com/",
     "user-agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
     ),
 }
 HTML_HEADERS = {**HEADERS, "accept": "text/html,application/xhtml+xml,*/*;q=0.8"}
@@ -482,6 +482,24 @@ def styled_diff(diff: str) -> str:
     return f"[{color}]{diff.capitalize()}[/{color}]"
 
 
+def render_rooms_table(rooms: list[dict]) -> Table:
+    t = Table(show_lines=False, header_style="bold", box=box.SIMPLE_HEAD, padding=(0, 1))
+    t.add_column("#",          style="dim", width=4, justify="right")
+    t.add_column("URL",        style="cyan", no_wrap=True, min_width=40)
+    t.add_column("Pts",        justify="right", style="bold yellow", width=6)
+    t.add_column("Difficulty", width=10)
+    t.add_column("Age",        width=7, justify="right", style="dim")
+    for i, room in enumerate(rooms, 1):
+        t.add_row(
+            str(i),
+            f"https://tryhackme.com/room/{room['code']}",
+            str(room["points"]),
+            styled_diff(room["difficulty"]),
+            days_old(room.get("release", "")),
+        )
+    return t
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -692,21 +710,7 @@ def main():
     console.rule(f"[bold cyan] Top {len(display)} Uncompleted Labs - Highest Points First [/bold cyan]", style="cyan")
     console.print()
     if display:
-        table = Table(show_lines=False, header_style="bold", box=box.SIMPLE_HEAD, padding=(0, 1))
-        table.add_column("#",          style="dim", width=4, justify="right")
-        table.add_column("URL",        style="cyan", no_wrap=True, min_width=40)
-        table.add_column("Pts",        justify="right", style="bold yellow", width=6)
-        table.add_column("Difficulty", width=10)
-        table.add_column("Age",        width=7, justify="right", style="dim")
-
-        for i, room in enumerate(display, 1):
-            url = f"https://tryhackme.com/room/{room['code']}"
-            table.add_row(
-                str(i), url, str(room["points"]),
-                styled_diff(room["difficulty"]),
-                days_old(room.get("release", "")),
-            )
-        console.print(table)
+        console.print(render_rooms_table(display))
     else:
         console.print("[yellow]No uncompleted rooms match your current filters.[/yellow]")
 
@@ -733,20 +737,7 @@ def main():
                 style="green",
             )
             console.print()
-            qw_table = Table(show_lines=False, header_style="bold", box=box.SIMPLE_HEAD, padding=(0, 1))
-            qw_table.add_column("#",          style="dim", width=4, justify="right")
-            qw_table.add_column("URL",        style="cyan", no_wrap=True, min_width=40)
-            qw_table.add_column("Pts",        justify="right", style="bold yellow", width=6)
-            qw_table.add_column("Difficulty", width=10)
-            qw_table.add_column("Age",        width=7, justify="right", style="dim")
-            for i, room in enumerate(quick_wins, 1):
-                url = f"https://tryhackme.com/room/{room['code']}"
-                qw_table.add_row(
-                    str(i), url, str(room["points"]),
-                    styled_diff(room["difficulty"]),
-                    days_old(room.get("release", "")),
-                )
-            console.print(qw_table)
+            console.print(render_rooms_table(quick_wins))
         else:
             console.rule("[bold green] Quick Wins [/bold green]", style="green")
             console.print("\n[yellow]No easy/medium rooms match the specified points range.[/yellow]")
